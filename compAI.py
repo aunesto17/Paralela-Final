@@ -8,12 +8,20 @@ class OMPAR:
 
     def __init__(self, model_path, device, args):
         self.device = device
-        self.model_cls = OMPify(model_path, device)
+        
+        self.model_cls = OMPify(model_path, 'gpu')
 
-        self.tokenizer_gen = GPT2Tokenizer(vocab_file=args.vocab_file, merges_file=args.merge_file, model_input_names=['input_ids'])
-        self.model_gen = GPTNeoXForCausalLM.from_pretrained('MonoCoder/MonoCoder_OMP').to(device)
+        self.tokenizer_gen = GPT2Tokenizer(vocab_file=args.vocab_file, 
+                                            merges_file=args.merge_file, 
+                                            model_input_names=['input_ids'])
+        
+        self.model_gen = GPTNeoXForCausalLM.from_pretrained(
+            'MonoCoder/MonoCoder_OMP', 
+            torch_dtype=torch.float16
+        ).to(self.device)
         self.model_gen.eval()
 
+    @torch.no_grad() # FIX: Disable gradient calculation for memory savings
     def cls_par(self, loop) -> bool:
         """
         Return if a parallelization is aplicable/neccessary
@@ -47,13 +55,14 @@ class OMPAR:
 
         return pragma        
 
+    @torch.no_grad() # FIX: Disable gradient calculation
     def gen_par(self, loop) -> str:
-        """
-        Generate OMP pragma
-        """
         inputs = self.tokenizer_gen(loop, return_tensors="pt").to(self.device)
 
-        outputs = self.model_gen.generate(inputs["input_ids"], max_length=64)
+        if self.device == 'cuda':
+            torch.cuda.empty_cache()
+
+        outputs = self.model_gen.generate(inputs["input_ids"], max_new_tokens=64)
         generated_pragma = self.tokenizer_gen.decode(outputs[0], skip_special_tokens=True)
 
         return generated_pragma[len(loop):]
@@ -61,7 +70,7 @@ class OMPAR:
 
     def auto_comp(self, loop) -> str or None:
         """
-        Return an omp pragma if neccessary
+        Si es necesario retorna un omp pragma
         """
         if self.cls_par(loop):
             return self.pragma_format(self.gen_par(loop))
